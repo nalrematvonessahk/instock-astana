@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f5f5f1">
+  <meta name="description" content="InStock Astana — обувь в ритме города. Кроссовки, классика и сезонные пары в одном пространстве.">
+  <title>InStock Astana — В твоём ритме</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23ed572b'/%3E%3Cpath d='M18 16h8v32h-8zm17 0h11v8H35zm0 13h11v19H35z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">К содержимому</a>
+  <div class="announcement"><span>ASTANA, KZ</span><p>Новые пары. Новые маршруты.</p><span>КОЛЛЕКЦИЯ / 2026</span></div>
+  <header class="header">
+    <a href="#/" class="logo" aria-label="InStock Astana — главная">instock<span class="logo-dot" aria-hidden="true">✳</span><small>ASTANA</small></a>
+    <nav class="desktop-nav" aria-label="Главная навигация"><a href="#/catalog" data-nav="catalog">Каталог</a><a href="#/catalog?gender=women">Женщинам</a><a href="#/catalog?gender=men">Мужчинам</a><a href="#/catalog?gender=unisex">Унисекс</a><a href="#/about" data-nav="about">О бренде</a></nav>
+    <div class="header-actions"><button class="icon-button" data-action="search" aria-label="Поиск"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.7"/><path d="m16 16 4.5 4.5"/></svg></button><button class="bag-button" data-action="cart" aria-label="Открыть корзину"><svg viewBox="0 0 24 24"><path d="M5 7h14l1 14H4L5 7Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg><span class="cart-label">Корзина</span><span id="cart-count">0</span></button><button class="icon-button mobile-menu" data-action="menu" aria-label="Открыть меню" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M3 7h18M3 12h18M3 17h18"/></svg></button></div>
+  </header>
+  <main id="main" tabindex="-1">
+    <section class="hero">
+      <div class="hero-copy"><p class="eyebrow"><span></span> IN YOUR ELEMENT / ОСЕНЬ 2026</p><h1>ГОРОД МЕНЯЕТСЯ.<br>ТВОЙ СТИЛЬ —<br><em>С ТОБОЙ.</em></h1><p class="hero-description">Для привычных улиц и новых маршрутов.<br>Найди пару, в которой ты — это ты.</p><a class="button button-dark" href="#/catalog">Найти свою пару <span>↗</span></a><div class="hero-bottom"><span>КРОССОВКИ / БОТИНКИ / КЛАССИКА</span><span>DROP / 01</span></div></div>
+      <div class="hero-visual"><div class="hero-visual-top"><span>EVERYDAY, YOUR WAY.</span><span>↗</span></div><div class="hero-caption"><span>В ТВОЁМ РИТМЕ.</span><a href="#/catalog?category=sneakers">Смотреть кроссовки ↗</a></div></div>
+    </section>
+    <section class="intro-line"><span>ПАРЫ, КОТОРЫЕ СТАНУТ ТВОИМИ.</span><p>От первого кофе до последнего поворота.</p><a href="#/catalog">Весь каталог ↗</a></section>
+    <section class="collection section-wrap"><div class="section-heading"><div><p class="eyebrow">THE DAILY ROTATION</p><h2>На каждый твой день<span class="orange">.</span></h2></div><a class="text-link" href="#/catalog">Смотреть всё <span>↗</span></a></div><div class="category-tabs"><a class="active" href="#/catalog">Все пары</a><a href="#/catalog?category=sneakers">Кроссовки</a><a href="#/catalog?category=boots">Ботинки</a><a href="#/catalog?category=loafers">Лоферы</a><a href="#/catalog?category=women">Женская классика</a></div><div id="home-products" class="product-grid"></div></section>
+  </main>
+  <footer class="footer"><div class="footer-main"><a href="#/" class="logo">instock<span class="logo-dot" aria-hidden="true">✳</span><small>ASTANA</small></a><p>Хорошие пары.<br>Твои истории.</p><div><a href="#/catalog">Каталог ↗</a><a href="#/about">О бренде ↗</a><button data-action="size-guide">Размерная сетка ↗</button></div><span class="footer-location">СОЗДАНО ДЛЯ ГОРОДА<br>ASTANA, KAZAKHSTAN<br>51°10′ N · 71°26′ E</span></div><div class="footer-bottom"><span>© 2026 InStock Astana</span><span>Визуальный прототип · товары и цены демонстрационные</span><span>KEEP MOVING ↗</span></div></footer>
+  <dialog id="panel" class="panel" aria-label="Панель магазина"></dialog>
+  <dialog id="size-dialog" class="size-dialog" aria-labelledby="size-title"></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
