@@ -1,5 +1,6 @@
 .sites-runtime/
 .openai/
+.vercel/
 node_modules/
 .env
 .env.*
