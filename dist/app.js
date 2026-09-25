@@ -44,6 +44,7 @@ const dateFormat = new Intl.DateTimeFormat('ru-RU', {day: 'numeric', month: 'lon
 let currentPath = null;
 let searchState = null;
 let visualSearch = {imageUrl: '', scenarioIndex: 0, phase: 'idle', token: 0};
+let editingOfferId = '';
 let toastTimer = 0;
 
 const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
@@ -875,7 +876,7 @@ function incomingReservationRow(reservation) {
     confirmed: `<button class="button button-small button-secondary" type="button" data-action="collect-reservation" data-id="${reservation.id}">Выдано покупателю</button>`,
   };
   return `<li class="reservation-row ${active ? '' : 'is-closed'}">
-    <div class="reservation-main"><h3>${escapeHtml(product.name)}, размер ${escapeHtml(reservation.size)}</h3><p class="num">${pairs(reservation.qty)} · код ${formatCode(reservation.code)} · ${money(reservation.price * reservation.qty)}</p></div>
+    <div class="reservation-main with-size"><div class="size-badge"><span>Размер</span><strong>${escapeHtml(reservation.size)}</strong></div><div><h3>${escapeHtml(product.name)}</h3><p class="num">${pairs(reservation.qty)} · код ${formatCode(reservation.code)} · ${money(reservation.price * reservation.qty)}</p></div></div>
     <div class="reservation-place"><strong>${escapeHtml(reservation.name)}</strong> · <span class="num">${escapeHtml(reservation.phone)}</span>${reservation.comment ? `<br>«${escapeHtml(reservation.comment)}»` : ''}</div>
     <div class="reservation-time">${reservationStatusLabel(reservation)}</div>
     <div class="reservation-time">${active ? `${timerLabel(reservation)}<span class="muted">до истечения</span>` : `<span class="muted">${dateFormat.format(reservation.createdAt)}</span>`}</div>
@@ -883,14 +884,44 @@ function incomingReservationRow(reservation) {
   </li>`;
 }
 
+function stockGrid(offer) {
+  const cells = sizesOf(productById(offer.productId)).map(size => {
+    const count = offer.sizes[size] || 0;
+    const reserved = offer.reserved[size] || 0;
+    return `<span class="stock-cell ${count ? '' : 'is-missing'}"><b>${size}</b><span>${count}</span>${reserved ? `<small>бронь ${reserved}</small>` : ''}</span>`;
+  }).join('');
+  return `<div class="stock-grid" role="list" aria-label="Остатки по размерам">${cells}</div>`;
+}
+
+function sizeInputs(product, values) {
+  const inputs = sizesOf(product).map(size => `<label class="size-input"><span>${size}</span><input class="input num" type="number" min="0" step="1" inputmode="numeric" name="size-${size}" value="${values[size] || 0}" aria-label="Размер ${size}, пар"></label>`).join('');
+  return `<div class="size-inputs">${inputs}</div>`;
+}
+
+function readSizeInputs(form, product) {
+  const sizes = {};
+  for (const size of sizesOf(product)) {
+    const count = Number(form.elements['size-' + size].value);
+    if (!Number.isInteger(count) || count < 0) return null;
+    if (count) sizes[size] = count;
+  }
+  return sizes;
+}
+
 function merchantOfferRow(offer) {
   const product = productById(offer.productId);
+  const editForm = `<form class="offer-edit" data-form="edit-offer" data-id="${offer.id}">
+    <label class="field"><span>Цена, ₸</span><input class="input num" type="number" name="price" min="100" step="100" value="${offer.price}" required></label>
+    <fieldset class="field size-fieldset"><legend>Остаток по размерам, пар</legend>${sizeInputs(product, offer.sizes)}</fieldset>
+    <div class="offer-edit-actions"><button class="button button-small" type="submit">Сохранить</button><button class="button button-small button-quiet" type="button" data-action="cancel-edit">Отмена</button></div>
+  </form>`;
   return `<li class="offer-row ${offer.stockTotal ? '' : 'is-out'} ${offer.published ? '' : 'is-hidden'}" data-offer="${offer.id}">
     <div class="offer-main"><h3><a href="#/product/${product.id}">${escapeHtml(product.name)}</a></h3><p>${categoryName(product.category)}</p></div>
     <div class="offer-meta"><strong>${offer.published ? 'Опубликована' : 'Снята с публикации'}</strong><span>${offer.reservedTotal ? `В брони ${pairs(offer.reservedTotal)}` : 'Броней нет'}</span></div>
     <div class="offer-price">${money(offer.price)}</div>
     <div class="offer-stock">${stockStatus(offer.stockTotal, '')}${updatedLabel(offer.updatedAt)}</div>
-    <div class="offer-action"><button class="button button-small button-quiet" type="button" data-action="toggle-offer" data-id="${offer.id}">${offer.published ? 'Снять с публикации' : 'Опубликовать'}</button></div>
+    <div class="offer-action"><button class="button button-small button-secondary" type="button" data-action="edit-offer" data-id="${offer.id}">Изменить</button><button class="button button-small button-quiet" type="button" data-action="toggle-offer" data-id="${offer.id}">${offer.published ? 'Снять с публикации' : 'Опубликовать'}</button></div>
+    ${editingOfferId === offer.id ? editForm : stockGrid(offer)}
   </li>`;
 }
 
@@ -916,6 +947,18 @@ function renderMerchant() {
   const pendingCount = active.filter(reservation => reservationState(reservation) === 'pending').length;
   const stats = merchantStats(store, storeReservations);
   const storeOffers = allOffers().filter(offer => offer.storeId === store.id);
+  const availableProducts = products.filter(product => !storeOffers.some(offer => offer.productId === product.id));
+  const addForm = availableProducts.length
+    ? `<form class="add-form" data-form="add-offer">
+        <h3>Новая позиция</h3>
+        <div class="add-form-row">
+          <label class="field"><span>Модель</span><select class="select" name="product">${availableProducts.map(product => `<option value="${product.id}">${escapeHtml(product.name)}</option>`).join('')}</select></label>
+          <label class="field"><span>Цена, ₸</span><input class="input num" type="number" name="price" min="100" step="100" required></label>
+        </div>
+        <fieldset class="field size-fieldset"><legend>Остаток по размерам, пар</legend><div id="add-sizes">${sizeInputs(availableProducts[0], {})}</div></fieldset>
+        <div><button class="button" type="submit">Добавить позицию</button></div>
+      </form>`
+    : '';
   main.innerHTML = `<div class="page">
     <div class="merchant-head">
       <div class="page-head"><span class="crumbs">Панель магазина</span><h1>${escapeHtml(store.name)}</h1><p>${escapeHtml(store.address)} · ${hoursText(store)}</p></div>
@@ -934,8 +977,43 @@ function renderMerchant() {
       <div class="section-head"><h2>Позиции магазина</h2><span class="small muted">${storeOffers.length} ${plural(storeOffers.length, 'позиция', 'позиции', 'позиций')}</span></div>
       <div class="list-head"><span>Модель</span><span>Публикация</span><span>Цена</span><span>Остаток</span><span></span></div>
       <ul class="offer-list">${storeOffers.map(merchantOfferRow).join('')}</ul>
+      ${addForm}
     </section>
   </div>`;
+  main.querySelector('[data-form="add-offer"] [name="product"]')?.addEventListener('change', event => {
+    main.querySelector('#add-sizes').innerHTML = sizeInputs(productById(event.target.value), {});
+  });
+  main.querySelector('.offer-edit input')?.focus();
+}
+
+function saveEditedOffer(form) {
+  const offer = allOffers().find(item => item.id === form.dataset.id);
+  const price = Number(form.elements.price.value);
+  const sizes = readSizeInputs(form, productById(offer.productId));
+  if (!(price > 0) || !sizes) {
+    showToast('Проверьте цену и остатки');
+    return;
+  }
+  saveOfferChange(offer.id, {price, sizes, updatedAt: Date.now()});
+  editingOfferId = '';
+  showToast('Остатки обновлены');
+  router();
+}
+
+function addOffer(form) {
+  const storeId = readStorage(storageKeys.merchantStore, '');
+  const product = productById(form.elements.product.value);
+  const price = Number(form.elements.price.value);
+  const sizes = readSizeInputs(form, product);
+  if (!(price > 0) || !sizes) {
+    showToast('Проверьте цену и остатки');
+    return;
+  }
+  const added = readStorage(storageKeys.addedOffers, []);
+  added.push({id: 'm' + Date.now().toString(36), productId: product.id, storeId, price, sizes, updatedAt: Date.now(), published: true});
+  writeStorage(storageKeys.addedOffers, added);
+  showToast('Позиция опубликована');
+  router();
 }
 
 function renderNotFound() {
@@ -963,6 +1041,8 @@ const formHandlers = {
     writeStorage(storageKeys.merchantStore, form.elements.store.value);
     router();
   },
+  'edit-offer': saveEditedOffer,
+  'add-offer': addOffer,
 };
 
 const actions = {
@@ -1009,6 +1089,14 @@ const actions = {
     showToast(`Выдано, остаток размера ${reservation.size} уменьшен`);
     router();
   },
+  'edit-offer': button => {
+    editingOfferId = button.dataset.id;
+    router();
+  },
+  'cancel-edit': () => {
+    editingOfferId = '';
+    router();
+  },
   'toggle-offer': button => {
     const offer = allOffers().find(item => item.id === button.dataset.id);
     saveOfferChange(offer.id, {published: !offer.published});
@@ -1017,6 +1105,7 @@ const actions = {
   },
   'merchant-logout': () => {
     writeStorage(storageKeys.merchantStore, '');
+    editingOfferId = '';
     router();
   },
 };
