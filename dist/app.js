@@ -31,6 +31,8 @@ const categoryIcons = {
   sport: '<path d="M7 17v-3l3-1 3-4 3 2c2 2 3 3 5 3v3z"/><path d="M2 9h4M1 12h4M7 17h14"/>',
 };
 const cameraIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+const arrowIcon = '<span class="arrow-dot" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 17 17 7M8 7h9v9"/></svg></span>';
+const checkIcon = '<svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m7.5 12.5 3 3 6-6.5"/></svg>';
 const searchIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.7"/><path d="m16 16 4.5 4.5"/></svg>';
 
 const pageLoadedAt = Date.now();
@@ -369,42 +371,109 @@ function photoDropzone(large) {
   return `<label class="dropzone ${large ? 'dropzone-large' : ''}" data-dropzone>
     ${large ? cameraIcon.replace('<svg', '<svg class="dropzone-icon"') : ''}
     <span class="button button-secondary">${cameraIcon}Искать по фото</span>
-    <p>Перетащите фото или скриншот пары сюда либо выберите файл</p>
+    <p>${large ? 'Перетащите фото или скриншот пары сюда либо выберите файл' : 'или перетащите сюда фото пары'}</p>
     <input type="file" accept="image/*">
   </label>`;
 }
 
+const stageWord = product => product.tags[0].toUpperCase();
+
+function productCard(summary, index) {
+  const {product, inStock, size, nearest} = summary;
+  const productHref = `#/product/${product.id}${size ? '?size=' + size : ''}`;
+  const tag = inStock.length ? (size ? `Размер ${size}` : 'В наличии') : 'Нет';
+  const nearestStore = nearest && storeById(nearest.storeId);
+  const nearestBlock = nearest
+    ? `<div class="card-nearest">
+        <div><span class="small muted">Ближайший</span><strong>${escapeHtml(nearestStore.name)}</strong><span class="small muted num">${formatDistance(summary.nearestKm)} от вас</span></div>
+        <a class="button button-small" href="#/reserve/${nearest.id}${size ? '?size=' + size : ''}">Забронировать</a>
+      </div>`
+    : '<div class="card-nearest is-empty"><span class="small muted">Сейчас нет ни в одном магазине</span></div>';
+  return `<article class="product-card appear" style="animation-delay:${Math.min(index, 8) * 50}ms">
+    <a class="product-card-media" href="${productHref}" aria-label="${escapeHtml(product.name)}">
+      <img src="${imageUrl(product)}" alt="" loading="lazy">
+      <span class="tag-vertical ${inStock.length ? '' : 'is-out'}">${tag}</span>
+    </a>
+    <div class="product-card-body">
+      <div class="product-card-title"><h3><a href="${productHref}">${escapeHtml(product.name)}</a></h3><span class="product-card-price num">${inStock.length ? 'от ' + money(summary.minPrice) : money(summary.minPrice)}</span></div>
+      <div class="product-card-facts"><span class="small muted">${categoryName(product.category)}</span>${storesStatus(inStock.length, size)}</div>
+      ${nearestBlock}
+    </div>
+  </article>`;
+}
+
 function renderHome() {
   const offerList = publishedOffers();
-  const tiles = categories.map(category => {
+  const savedSize = readSavedSize();
+  const pairsNow = offerList.reduce((sum, offer) => sum + offer.availableTotal, 0);
+  const lastUpdate = Math.max(...offerList.map(offer => offer.updatedAt));
+  const showcase = products
+    .map(product => summarizeProduct(product, offerList, sizeForProduct(product, savedSize)))
+    .filter(summary => summary.inStock.length)
+    .slice(0, 6);
+  const categoryCircles = categories.map(category => {
     const categoryProducts = products.filter(product => product.category === category.id);
     const storeCount = new Set(offerList.filter(offer => offer.availableTotal > 0 && categoryProducts.some(product => product.id === offer.productId)).map(offer => offer.storeId)).size;
-    return `<a class="category-tile" href="#/search?cat=${category.id}"><svg viewBox="0 0 24 24" aria-hidden="true">${categoryIcons[category.id]}</svg><div><h3>${category.name}</h3><span class="num">${storeCount} ${plural(storeCount, 'магазин', 'магазина', 'магазинов')} с наличием</span></div></a>`;
+    return `<a class="category-tile" href="#/search?cat=${category.id}"><span class="category-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${categoryIcons[category.id]}</svg></span><h3>${category.name}</h3><span class="small muted num">${storeCount} ${plural(storeCount, 'магазин', 'магазина', 'магазинов')}</span></a>`;
   }).join('');
   main.innerHTML = `<section class="hero">
-      <h1>Найдите свою пару в магазинах Астаны</h1>
-      <p>Покажем, где модель есть в вашем размере прямо сейчас, и отложим её на 24 часа.</p>
-      <form class="search-big" data-form="search" role="search">
-        ${searchIcon}
-        <input type="search" name="q" placeholder="Например, челси, кеды или дутики" aria-label="Какую обувь вы ищете">
-        <label class="size-select"><span>Мой размер</span><select name="size" data-size-preference>${sizeOptions(readSavedSize(), 'Любой')}</select></label>
-        <button class="button" type="submit">Найти</button>
-      </form>
-      <div class="search-or">или</div>
-      ${photoDropzone(false)}
+      <div class="hero-copy">
+        <span class="eyebrow">Обувь в офлайн-магазинах Астаны</span>
+        <h1>Найдите свою пару рядом и заберите сегодня</h1>
+        <p>Покажем, где модель есть в вашем размере прямо сейчас, и отложим её на 24 часа. Примерка и оплата — в магазине.</p>
+        <form class="search-big" data-form="search" role="search">
+          ${searchIcon}
+          <input type="search" name="q" placeholder="Челси, кеды, дутики…" aria-label="Какую обувь вы ищете">
+          <label class="size-select"><span>Мой размер</span><select name="size" data-size-preference>${sizeOptions(savedSize, 'Любой')}</select></label>
+          <button class="button button-arrow" type="submit">Найти${arrowIcon}</button>
+        </form>
+        ${photoDropzone(false)}
+      </div>
+      <div class="hero-stage">
+        <span class="display-word" aria-hidden="true">АСТАНА</span>
+        <img src="assets/running-light.jpg" alt="Беговые кроссовки">
+        <div class="hero-live">
+          <span class="status status-in"><span class="dot"></span>Сейчас в наличии</span>
+          <strong class="num">${pairs(pairsNow)}</strong>
+          <span>в ${storesCount(stores.length)} города</span>
+          ${updatedLabel(lastUpdate)}
+        </div>
+      </div>
     </section>
     <div class="page">
-      <section>
-        <div class="section-head"><h2>Категории</h2><a href="#/search">Вся обувь</a></div>
-        <div class="category-grid">${tiles}</div>
+      <section class="showcase">
+        <div class="showcase-head">
+          <div><h2 class="section-title">В наличии сегодня</h2><p class="muted">${savedSize ? `Модели, которые есть в вашем ${savedSize} размере.` : 'Модели, которые можно забрать уже сегодня. Укажите размер, чтобы видеть только свои.'}</p></div>
+          <div class="showcase-side">
+            <span class="display-outline" aria-hidden="true">ОБУВЬ</span>
+            <div class="showcase-stats">
+              <div><strong class="num">${stores.length}</strong><span>магазинов</span></div>
+              <div><strong class="num">${products.length}</strong><span>моделей</span></div>
+              <a class="button button-secondary button-small" href="#/search">Смотреть все</a>
+            </div>
+          </div>
+        </div>
+        <div class="product-grid">${showcase.map(productCard).join('')}</div>
       </section>
       <section class="section">
-        <div class="section-head"><h2>Как это работает</h2></div>
+        <div class="section-head"><h2 class="section-title">Категории</h2><a href="#/search">Вся обувь</a></div>
+        <div class="category-grid">${categoryCircles}</div>
+      </section>
+      <section class="section">
+        <div class="section-head"><h2 class="section-title">Как это работает</h2></div>
         <ol class="steps">
-          <li><b>01</b><h3>Найдите</h3><p>Введите запрос или загрузите фото пары и укажите свой размер.</p></li>
-          <li><b>02</b><h3>Проверьте наличие рядом</h3><p>Сравните цены и остатки именно вашего размера в магазинах города.</p></li>
-          <li><b>03</b><h3>Заберите в магазине</h3><p>Забронируйте на 24 часа, примерьте и оплатите на месте.</p></li>
+          <li><b class="num">01</b><h3>Найдите</h3><p>Введите запрос или загрузите фото пары и укажите свой размер.</p></li>
+          <li><b class="num">02</b><h3>Проверьте наличие рядом</h3><p>Сравните цены и остатки именно вашего размера в магазинах города.</p></li>
+          <li><b class="num">03</b><h3>Заберите в магазине</h3><p>Забронируйте на 24 часа, примерьте и оплатите на месте.</p></li>
         </ol>
+      </section>
+      <section class="section merchant-band">
+        <div class="merchant-band-copy"><h2 class="section-title">Вы магазин обуви?</h2><p>Публикуйте остатки по размерам и получайте покупателей, которые приходят наверняка.</p><a class="button button-light button-arrow" href="#/merchant">Панель магазина${arrowIcon}</a></div>
+        <ul class="merchant-band-list">
+          <li><h3>Остатки по размерам</h3><p>Покупатель видит, есть ли его размер, до того как приехать.</p></li>
+          <li><h3>Брони с таймером</h3><p>Пара отложена 24 часа, подтверждение — в один клик.</p></li>
+          <li><h3>Рейтинг надёжности</h3><p>Точные остатки поднимают магазин в выдаче.</p></li>
+        </ul>
       </section>
     </div>`;
   bindDropzone(main.querySelector('[data-dropzone]'), startVisualSearchFromFile);
@@ -505,25 +574,6 @@ function filterProducts(state) {
     .sort((a, b) => (b.inStock.length > 0) - (a.inStock.length > 0) || comparators[state.sort](a, b));
 }
 
-function resultItem(summary, index) {
-  const {product, inStock, size} = summary;
-  const productHref = `#/product/${product.id}${size ? '?size=' + size : ''}`;
-  const nearest = summary.nearest
-    ? `<div class="result-nearest"><ul class="offer-list">${offerRow(summary.nearest, size)}</ul></div>`
-    : '';
-  const priceNote = inStock.length ? (size ? `цены на размер ${size}` : 'цены по городу') : 'нет в наличии';
-  return `<li class="result-item appear" style="animation-delay:${Math.min(index, 8) * 40}ms">
-    <a class="thumb" href="${productHref}"><img src="${imageUrl(product)}" alt="" loading="lazy"></a>
-    <div class="result-info">
-      <span class="small muted">${categoryName(product.category)}</span>
-      <h3><a href="${productHref}">${escapeHtml(product.name)}</a></h3>
-      <div class="result-facts">${storesStatus(inStock.length, size)}${inStock.length ? `<span>Ближайший — <strong class="num">${formatDistance(summary.nearestKm)}</strong></span>` : ''}</div>
-    </div>
-    <div class="result-price">${priceRange(summary.minPrice, summary.maxPrice)}<small>${priceNote}</small></div>
-    ${nearest}
-  </li>`;
-}
-
 function filtersMarkup() {
   const chip = (key, value, label) => `<button class="chip" type="button" data-action="filter" data-key="${key}" data-value="${value}" aria-pressed="${searchState[key] === value}">${label}</button>`;
   return `<details class="filters" ${window.matchMedia('(max-width: 760px)').matches ? '' : 'open'}>
@@ -556,8 +606,8 @@ function renderSearchResults() {
     button.setAttribute('aria-pressed', String(searchState[key] === button.dataset.value));
   });
   list.innerHTML = results.length
-    ? results.map(resultItem).join('')
-    : '<li class="empty"><h2>Ничего не нашлось</h2><p>Попробуйте другой запрос, размер или ослабьте фильтры.</p><button class="button button-secondary" type="button" data-action="reset-filters">Сбросить фильтры</button></li>';
+    ? results.map(productCard).join('')
+    : '<div class="empty"><h2>Ничего не нашлось</h2><p>Попробуйте другой запрос, размер или ослабьте фильтры.</p><button class="button button-secondary" type="button" data-action="reset-filters">Сбросить фильтры</button></div>';
   updateLiveLabels();
 }
 
@@ -577,7 +627,7 @@ function renderSearch(_, params) {
       ${filtersMarkup()}
       <section>
         <div class="result-bar"><p id="result-count" class="muted" aria-live="polite"></p><div class="sort" role="group" aria-label="Сортировка">${sortOptions.map(([value, label]) => `<button class="chip" type="button" data-action="sort" data-value="${value}" aria-pressed="${searchState.sort === value}">${label}</button>`).join('')}</div></div>
-        <ul class="result-list" id="result-list"></ul>
+        <div class="product-grid product-grid-search" id="result-list"></div>
       </section>
     </div>
   </div>`;
@@ -597,9 +647,9 @@ function sizePicker(product, offerList, selectedSize) {
     const classes = ['size-option', count ? '' : 'is-missing', selected ? 'is-selected' : ''].filter(Boolean).join(' ');
     return `<button class="${classes}" type="button" data-action="pick-size" data-product="${product.id}" data-size="${size}" aria-pressed="${selected}" ${count ? '' : 'disabled'}><strong>${size}</strong><span>${count ? `${count}\u00a0маг.` : 'нет'}</span></button>`;
   }).join('');
-  const title = selectedSize ? `Размер ${selectedSize}` : 'В каких размерах модель есть в городе';
-  const reset = selectedSize ? `<button class="button button-quiet button-small" type="button" data-action="pick-size" data-product="${product.id}" data-size="">Все размеры</button>` : '<span class="small muted">Выберите размер, чтобы увидеть магазины с ним</span>';
-  return `<div class="size-picker"><div class="size-picker-head"><h2>${title}</h2>${reset}</div><div class="size-options" role="group" aria-label="Размеры">${cells}</div></div>`;
+  const title = selectedSize ? `Размер ${selectedSize}` : 'Выберите размер';
+  const note = selectedSize ? `<button class="button button-quiet button-small" type="button" data-action="pick-size" data-product="${product.id}" data-size="">Все размеры</button>` : '<span class="small muted">Под размером — число магазинов, где он есть</span>';
+  return `<div class="size-picker"><div class="size-picker-head"><h3>${title}</h3>${note}</div><div class="size-options" role="group" aria-label="Размеры">${cells}</div></div>`;
 }
 
 function renderProduct(productId, params) {
@@ -629,24 +679,41 @@ function renderProduct(productId, params) {
         </div>
       </div>`
     : `<div class="empty"><p>${size ? `Размера ${size} сейчас нет ни в одном магазине. Выберите другой размер выше.` : 'Сейчас эта модель не опубликована ни в одном магазине.'}</p></div>`;
-  main.innerHTML = `<div class="page">
+  const lastUpdate = summary.offers.length ? Math.max(...summary.offers.map(offer => offer.updatedAt)) : Date.now();
+  main.innerHTML = `<div class="page page-product">
     <nav class="crumbs" aria-label="Навигация"><a href="#/search">Поиск</a> / <a href="#/search?cat=${product.category}">${categoryName(product.category)}</a></nav>
-    <section class="product-head">
-      <div class="thumb"><img src="${imageUrl(product)}" alt="${escapeHtml(product.name)}"></div>
-      <div class="product-info">
-        <h1>${escapeHtml(product.name)}</h1>
-        <p>${escapeHtml(product.description)}</p>
-        <p class="small muted">${escapeHtml(product.details)} · размеры ${product.sizeRange.join('–')}</p>
-        <div class="product-summary">
-          <div><span>${size ? `Цены на размер ${size}` : 'Цены в городе'}</span><strong>${summary.offers.length ? priceRange(summary.minPrice, summary.maxPrice) : '—'}</strong></div>
-          <div><span>${size ? `Магазинов с размером ${size}` : 'Магазинов с наличием'}</span><strong>${summary.inStock.length} из ${summary.offers.length}</strong></div>
-          <div><span>Ближайший</span><strong>${formatDistance(summary.nearestKm)}</strong></div>
-        </div>
-      </div>
+    <section class="product-stage">
+      <span class="display-word" aria-hidden="true">${stageWord(product)}</span>
+      <div class="stage-photo"><img src="${imageUrl(product)}" alt="${escapeHtml(product.name)}"></div>
     </section>
-    ${sizePicker(product, summary.offers, size)}
-    <section class="section">
-      <div class="section-head"><h2>Где есть сейчас</h2><span class="small muted">Сначала ближайшие с наличием</span></div>
+    <section class="product-head">
+      <div class="product-info">
+        <span class="eyebrow">${categoryName(product.category)}</span>
+        <h2 class="section-title">О модели</h2>
+        <p>${escapeHtml(product.description)}</p>
+        <ul class="spec-list">
+          ${product.details.split(' · ').map(detail => `<li>${checkIcon}${escapeHtml(detail[0].toUpperCase() + detail.slice(1))}</li>`).join('')}
+          <li>${checkIcon}Размеры ${product.sizeRange.join('–')}</li>
+          <li>${checkIcon}Примерка и оплата в магазине</li>
+        </ul>
+      </div>
+      <aside class="product-panel">
+        <h1>${escapeHtml(product.name)}</h1>
+        <p class="product-panel-price num">${summary.offers.length ? priceRange(summary.minPrice, summary.maxPrice) : '—'}<small>${size ? `цены на размер ${size}` : 'цены в городе'}</small></p>
+        ${sizePicker(product, summary.offers, size)}
+        <div class="product-summary">
+          <div><span>${size ? `С размером ${size}` : 'С наличием'}</span><strong class="num">${summary.inStock.length} из ${summary.offers.length}</strong></div>
+          <div><span>Ближайший</span><strong class="num">${formatDistance(summary.nearestKm)}</strong></div>
+        </div>
+        <ul class="trust-list">
+          <li>${checkIcon}Остатки ${formatAgo(lastUpdate)}</li>
+          <li>${checkIcon}Бронь бесплатно на 24 часа</li>
+        </ul>
+        <button class="button button-arrow button-wide" type="button" data-action="scroll-to-stores" ${listedOffers.length ? '' : 'disabled'}>${listedOffers.length ? `Выбрать магазин · ${listedOffers.length}` : 'Нет в наличии'}${arrowIcon}</button>
+      </aside>
+    </section>
+    <section class="section" id="stores">
+      <div class="section-head"><h2 class="section-title">Где есть сейчас</h2><span class="small muted">Сначала ближайшие с наличием</span></div>
       ${availability}
     </section>
   </div>`;
@@ -1054,6 +1121,7 @@ const actions = {
     router();
   },
   'pick-size': pickSize,
+  'scroll-to-stores': () => main.querySelector('#stores').scrollIntoView({behavior: 'smooth', block: 'start'}),
   'visual-sample': button => {
     const scenarioIndex = Number(button.dataset.index);
     startVisualSearch(imageUrl(productById(visualScenarios[scenarioIndex].sampleProductId)), scenarioIndex);

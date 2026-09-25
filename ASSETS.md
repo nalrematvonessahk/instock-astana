@@ -16,4 +16,4 @@
 
 Силуэты `winter-puffer.svg` (зимние дутики) и `kids-sneakers.svg` (детские кроссовки) нарисованы для этого прототипа.
 
-Шрифт Inter загружается через Google Fonts. При отсутствии сети используется системный sans-serif. https://fonts.google.com/specimen/Inter
+Шрифты Inter (интерфейс) и Oswald (крупные акцентные надписи) загружаются через Google Fonts. При отсутствии сети используются системные шрифты. https://fonts.google.com/specimen/Inter, https://fonts.google.com/specimen/Oswald
