@@ -1,14 +1,16 @@
 'use strict';
 const storageKeys = {
-  reservations: 'instock.reservations',
-  offerChanges: 'instock.offerChanges',
-  addedOffers: 'instock.addedOffers',
-  merchantStore: 'instock.merchantStore',
-  seededStores: 'instock.seededStores',
+  reservations: 'instock.v2.reservations',
+  offerChanges: 'instock.v2.offerChanges',
+  addedOffers: 'instock.v2.addedOffers',
+  merchantStore: 'instock.v2.merchantStore',
+  seededStores: 'instock.v2.seededStores',
+  size: 'instock.v2.size',
 };
 const hourMs = 3600000;
 const reservationLifetimeMs = 24 * hourMs;
-const lowStockLimit = 3;
+const lowStockLimit = {size: 2, total: 3};
+const maxPairsPerReservation = 3;
 const visualSearchDelayMs = 1500;
 const distanceOptions = [['', 'Любое'], ['2', 'до 2 км'], ['5', 'до 5 км'], ['10', 'до 10 км']];
 const sortOptions = [['near', 'Ближайшие'], ['cheap', 'Дешевле'], ['rating', 'По рейтингу магазина']];
@@ -21,12 +23,12 @@ const reservationStatusLabels = {
   rejected: 'Отклонена магазином',
 };
 const categoryIcons = {
-  dishes: '<path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16M4 21h14"/>',
-  decor: '<path d="M9 21h6l1-7H8zM12 14V9"/><path d="M12 10c-3 0-5-2-5-5 3 0 5 2 5 5zm0-1c0-3 2-5 5-5 0 3-2 5-5 5z"/>',
-  clothing: '<path d="M8 3 3 6l2 5 3-1v11h8V10l3 1 2-5-5-3c0 2-1.5 3-4 3S8 5 8 3z"/>',
-  gifts: '<path d="M4 11h16v10H4zM3 7h18v4H3zm9 0v14"/><path d="M12 7c-2-4-6-4-6-1.5S10 7 12 7zm0 0c2-4 6-4 6-1.5S14 7 12 7z"/>',
-  accessories: '<path d="M5 8h14l-1 13H6z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
-  kids: '<path d="M4 14h7v7H4zm9 0h7v7h-7zM8.5 7h7v7h-7z"/>',
+  sneakers: '<path d="M3 17v-4l4-1 3-4 3 2c2 2 5 3 8 3v4z"/><path d="M3 17h18M9 11l1.5 1M11 9.5l1.5 1"/>',
+  classic: '<path d="M3 16c3 0 6-2 8-6 2 2 5 3 10 4v2.5H3z"/><path d="M3 18.5h18"/>',
+  winter: '<path d="M7 3h6v10c3 0 7 1 7 4v2H6z"/><path d="M7 7h6M7 10h6"/>',
+  boots: '<path d="M8 3h5v11l6 2c1 .3 2 1 2 2v1H7z"/><path d="M8 7h5"/>',
+  kids: '<path d="M4 18v-3l3-1 2-3 3 2c1.5 1 3 2 6 2v3z"/><path d="M4 18h14"/><circle cx="18" cy="6" r="2"/>',
+  sport: '<path d="M7 17v-3l3-1 3-4 3 2c2 2 3 3 5 3v3z"/><path d="M2 9h4M1 12h4M7 17h14"/>',
 };
 const cameraIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
 const searchIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.7"/><path d="m16 16 4.5 4.5"/></svg>';
@@ -42,7 +44,6 @@ const dateFormat = new Intl.DateTimeFormat('ru-RU', {day: 'numeric', month: 'lon
 let currentPath = null;
 let searchState = null;
 let visualSearch = {imageUrl: '', scenarioIndex: 0, phase: 'idle', token: 0};
-let editingOfferId = '';
 let toastTimer = 0;
 
 const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
@@ -54,6 +55,7 @@ const categoryName = id => categories.find(category => category.id === id)?.name
 const imageUrl = product => 'assets/' + product.image;
 const formatCode = code => `${code.slice(0, 3)} ${code.slice(3)}`;
 const compareNumbers = (a, b) => a === b ? 0 : a < b ? -1 : 1;
+const sumValues = map => Object.values(map).reduce((sum, value) => sum + value, 0);
 
 function plural(count, one, few, many) {
   const mod10 = count % 10, mod100 = count % 100;
@@ -61,6 +63,9 @@ function plural(count, one, few, many) {
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
   return many;
 }
+
+const pairs = count => `${count} ${plural(count, 'пара', 'пары', 'пар')}`;
+const storesCount = count => `${count} ${plural(count, 'магазине', 'магазинах', 'магазинах')}`;
 
 function readStorage(key, fallback) {
   try {
@@ -84,6 +89,22 @@ function showToast(message) {
   toastElement.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastElement.classList.remove('show'), 2600);
+}
+
+function sizeSeries([from, to]) {
+  return Array.from({length: to - from + 1}, (_, index) => String(from + index));
+}
+
+const sizesOf = product => sizeSeries(product.sizeRange);
+const readSavedSize = () => readStorage(storageKeys.size, '');
+
+function saveSize(size) {
+  writeStorage(storageKeys.size, size);
+}
+
+function sizeOptions(selected, emptyLabel) {
+  const options = sizes => sizes.map(size => `<option value="${size}" ${size === selected ? 'selected' : ''}>${size}</option>`).join('');
+  return `<option value="">${emptyLabel}</option><optgroup label="Взрослая обувь">${options(sizeSeries(adultSizes))}</optgroup><optgroup label="Детская обувь">${options(sizeSeries(kidsSizes))}</optgroup>`;
 }
 
 function loadReservations() {
@@ -128,12 +149,17 @@ function allOffers() {
   const baseOffers = offers.map(offer => ({...offer, updatedAt: pageLoadedAt - offer.updatedMinutesAgo * 60000, published: true}));
   return [...baseOffers, ...readStorage(storageKeys.addedOffers, [])].map(offer => {
     const merged = {...offer, ...changes[offer.id]};
-    const reserved = activeReservations.filter(reservation => reservation.offerId === offer.id).reduce((sum, reservation) => sum + reservation.qty, 0);
-    return {...merged, reserved, available: Math.max(0, merged.stock - reserved)};
+    const reserved = {};
+    activeReservations.filter(reservation => reservation.offerId === offer.id).forEach(reservation => {
+      reserved[reservation.size] = (reserved[reservation.size] || 0) + reservation.qty;
+    });
+    const available = Object.fromEntries(Object.entries(merged.sizes).map(([size, count]) => [size, Math.max(0, count - (reserved[size] || 0))]));
+    return {...merged, reserved, available, stockTotal: sumValues(merged.sizes), reservedTotal: sumValues(reserved), availableTotal: sumValues(available)};
   });
 }
 
 const publishedOffers = () => allOffers().filter(offer => offer.published);
+const availableIn = (offer, size) => size ? offer.available[size] || 0 : offer.availableTotal;
 
 function saveOfferChange(offerId, changes) {
   const allChanges = readStorage(storageKeys.offerChanges, {});
@@ -180,20 +206,24 @@ function isOpenNow(store) {
 
 const hoursText = store => `${store.opens}–${store.closes}${isOpenNow(store) ? '' : ', сейчас закрыто'}`;
 
-function stockState(quantity) {
+function stockState(quantity, size) {
   if (quantity <= 0) return 'out';
-  return quantity <= lowStockLimit ? 'low' : 'in';
+  return quantity <= (size ? lowStockLimit.size : lowStockLimit.total) ? 'low' : 'in';
 }
 
-function stockStatus(quantity) {
-  const state = stockState(quantity);
-  const text = {out: 'Нет в наличии', low: `Осталось ${quantity} шт.`, in: `В наличии ${quantity} шт.`}[state];
+function stockStatus(quantity, size) {
+  const state = stockState(quantity, size);
+  const text = {
+    out: size ? `Размера ${size} нет` : 'Нет в наличии',
+    low: `Осталось ${pairs(quantity)}`,
+    in: `В наличии ${pairs(quantity)}`,
+  }[state];
   return `<span class="status status-${state}"><span class="dot"></span>${text}</span>`;
 }
 
-function storesStatus(count) {
-  if (!count) return '<span class="status status-out"><span class="dot"></span>Сейчас нет в наличии</span>';
-  return `<span class="status status-in"><span class="dot"></span>В наличии в ${count} ${plural(count, 'магазине', 'магазинах', 'магазинах')}</span>`;
+function storesStatus(count, size) {
+  if (!count) return `<span class="status status-out"><span class="dot"></span>${size ? `Размера ${size} сейчас нет` : 'Сейчас нет в наличии'}</span>`;
+  return `<span class="status status-in"><span class="dot"></span>${size ? `Размер ${size} — в ${storesCount(count)}` : `В наличии в ${storesCount(count)}`}</span>`;
 }
 
 const updatedLabel = timestamp => `<span class="updated" data-updated-at="${timestamp}">${formatAgo(timestamp)}</span>`;
@@ -204,12 +234,13 @@ function reservationStatusLabel(reservation) {
   return `<span class="reservation-status is-${state}"><span class="dot"></span>${reservationStatusLabels[state]}</span>`;
 }
 
-function summarizeProduct(product, offerList) {
+function summarizeProduct(product, offerList, size) {
   const productOffers = offerList.filter(offer => offer.productId === product.id);
-  const inStock = productOffers.filter(offer => offer.available > 0).sort(byDistance);
+  const inStock = productOffers.filter(offer => availableIn(offer, size) > 0).sort(byDistance);
   const prices = (inStock.length ? inStock : productOffers).map(offer => offer.price);
   return {
     product,
+    size,
     offers: productOffers,
     inStock,
     minPrice: Math.min(...prices),
@@ -220,40 +251,34 @@ function summarizeProduct(product, offerList) {
   };
 }
 
-function storeOfferCells(offer, store, state) {
-  return {
-    main: `<div class="offer-main"><h3>${escapeHtml(store.name)}</h3><p>${escapeHtml(store.address)}</p></div>`,
-    meta: `<div class="offer-meta"><strong class="num">${formatDistance(distanceKm(store))}</strong><span>${hoursText(store)}</span><span>Надёжность ${store.reliability}%</span></div>`,
-    action: state === 'out'
-      ? '<button class="button button-small" type="button" disabled>Забронировать</button>'
-      : `<a class="button button-small" href="#/reserve/${offer.id}">Забронировать</a>`,
-    extra: '',
-  };
+const sizeForProduct = (product, size) => sizesOf(product).includes(size) ? size : '';
+
+function sizeGrid(offer, selectedSize) {
+  const cells = sizesOf(productById(offer.productId)).map(size => {
+    const count = offer.available[size] || 0;
+    const selected = size === selectedSize;
+    const classes = ['size-cell', count ? 'is-available' : 'is-missing', selected ? 'is-selected' : ''].filter(Boolean).join(' ');
+    return `<button class="${classes}" type="button" data-action="pick-size" data-product="${offer.productId}" data-size="${size}" aria-pressed="${selected}" ${count ? '' : 'disabled'} aria-label="Размер ${size}: ${count ? pairs(count) : 'нет'}">${size}</button>`;
+  }).join('');
+  return `<div class="size-grid" role="group" aria-label="Размеры в магазине">${cells}</div>`;
 }
 
-function merchantOfferCells(offer, product) {
-  const editForm = `<form class="offer-edit" data-form="edit-offer" data-id="${offer.id}">
-    <label class="field"><span>Цена, ₸</span><input class="input num" type="number" name="price" min="1" step="100" value="${offer.price}" required></label>
-    <label class="field"><span>Остаток, шт.</span><input class="input num" type="number" name="stock" min="0" value="${offer.stock}" required></label>
-    <button class="button button-small" type="submit">Сохранить</button>
-    <button class="button button-small button-quiet" type="button" data-action="cancel-edit">Отмена</button>
-  </form>`;
-  return {
-    main: `<div class="offer-main"><h3><a href="#/product/${product.id}">${escapeHtml(product.name)}</a></h3><p>${categoryName(product.category)}</p></div>`,
-    meta: `<div class="offer-meta"><strong>${offer.published ? 'Опубликована' : 'Снята с публикации'}</strong><span>${offer.reserved ? `В брони ${offer.reserved} шт.` : 'Броней нет'}</span></div>`,
-    action: `<button class="button button-small button-secondary" type="button" data-action="edit-offer" data-id="${offer.id}">Изменить</button><button class="button button-small button-quiet" type="button" data-action="toggle-offer" data-id="${offer.id}">${offer.published ? 'Снять с публикации' : 'Опубликовать'}</button>`,
-    extra: editingOfferId === offer.id ? editForm : '',
-  };
-}
-
-function offerRow(offer, mode = 'store') {
-  const quantity = mode === 'merchant' ? offer.stock : offer.available;
-  const state = stockState(quantity);
-  const cells = mode === 'merchant'
-    ? merchantOfferCells(offer, productById(offer.productId))
-    : storeOfferCells(offer, storeById(offer.storeId), state);
-  const classes = ['offer-row', state === 'out' ? 'is-out' : '', mode === 'merchant' && !offer.published ? 'is-hidden' : ''].filter(Boolean).join(' ');
-  return `<li class="${classes}" data-offer="${offer.id}">${cells.main}${cells.meta}<div class="offer-price">${money(offer.price)}</div><div class="offer-stock">${stockStatus(quantity)}${updatedLabel(offer.updatedAt)}</div><div class="offer-action">${cells.action}</div>${cells.extra}</li>`;
+function offerRow(offer, size = '') {
+  const store = storeById(offer.storeId);
+  const quantity = availableIn(offer, size);
+  const state = stockState(quantity, size);
+  const reserveHref = `#/reserve/${offer.id}${size ? '?size=' + size : ''}`;
+  const action = state === 'out'
+    ? '<button class="button button-small" type="button" disabled>Забронировать</button>'
+    : `<a class="button button-small" href="${reserveHref}">Забронировать</a>`;
+  return `<li class="offer-row ${state === 'out' ? 'is-out' : ''}" data-offer="${offer.id}">
+    <div class="offer-main"><h3>${escapeHtml(store.name)}</h3><p>${escapeHtml(store.address)}</p></div>
+    <div class="offer-meta"><strong class="num">${formatDistance(distanceKm(store))}</strong><span>${hoursText(store)}</span><span>Надёжность ${store.reliability}%</span></div>
+    <div class="offer-price">${money(offer.price)}</div>
+    <div class="offer-stock">${stockStatus(quantity, size)}${updatedLabel(offer.updatedAt)}</div>
+    <div class="offer-action">${action}</div>
+    ${sizeGrid(offer, size)}
+  </li>`;
 }
 
 function cityMap(points) {
@@ -343,7 +368,7 @@ function photoDropzone(large) {
   return `<label class="dropzone ${large ? 'dropzone-large' : ''}" data-dropzone>
     ${large ? cameraIcon.replace('<svg', '<svg class="dropzone-icon"') : ''}
     <span class="button button-secondary">${cameraIcon}Искать по фото</span>
-    <p>Перетащите фото или скриншот сюда либо выберите файл</p>
+    <p>Перетащите фото или скриншот пары сюда либо выберите файл</p>
     <input type="file" accept="image/*">
   </label>`;
 }
@@ -352,15 +377,16 @@ function renderHome() {
   const offerList = publishedOffers();
   const tiles = categories.map(category => {
     const categoryProducts = products.filter(product => product.category === category.id);
-    const storeCount = new Set(offerList.filter(offer => offer.available > 0 && categoryProducts.some(product => product.id === offer.productId)).map(offer => offer.storeId)).size;
+    const storeCount = new Set(offerList.filter(offer => offer.availableTotal > 0 && categoryProducts.some(product => product.id === offer.productId)).map(offer => offer.storeId)).size;
     return `<a class="category-tile" href="#/search?cat=${category.id}"><svg viewBox="0 0 24 24" aria-hidden="true">${categoryIcons[category.id]}</svg><div><h3>${category.name}</h3><span class="num">${storeCount} ${plural(storeCount, 'магазин', 'магазина', 'магазинов')} с наличием</span></div></a>`;
   }).join('');
   main.innerHTML = `<section class="hero">
-      <h1>Найдите вещь в магазинах Астаны</h1>
-      <p>Покажем, где она есть прямо сейчас, и отложим её для вас на 24 часа.</p>
+      <h1>Найдите свою пару в магазинах Астаны</h1>
+      <p>Покажем, где модель есть в вашем размере прямо сейчас, и отложим её на 24 часа.</p>
       <form class="search-big" data-form="search" role="search">
         ${searchIcon}
-        <input type="search" name="q" placeholder="Например, пиалы, шарф или конструктор" aria-label="Что вы ищете">
+        <input type="search" name="q" placeholder="Например, челси, кеды или дутики" aria-label="Какую обувь вы ищете">
+        <label class="size-select"><span>Мой размер</span><select name="size" data-size-preference>${sizeOptions(readSavedSize(), 'Любой')}</select></label>
         <button class="button" type="submit">Найти</button>
       </form>
       <div class="search-or">или</div>
@@ -368,15 +394,15 @@ function renderHome() {
     </section>
     <div class="page">
       <section>
-        <div class="section-head"><h2>Категории</h2><a href="#/search">Все товары</a></div>
+        <div class="section-head"><h2>Категории</h2><a href="#/search">Вся обувь</a></div>
         <div class="category-grid">${tiles}</div>
       </section>
       <section class="section">
         <div class="section-head"><h2>Как это работает</h2></div>
         <ol class="steps">
-          <li><b>01</b><h3>Найдите</h3><p>Введите запрос или загрузите фото вещи, которую ищете.</p></li>
-          <li><b>02</b><h3>Проверьте наличие рядом</h3><p>Сравните цены, остатки и расстояние до магазинов города.</p></li>
-          <li><b>03</b><h3>Заберите в магазине</h3><p>Забронируйте на 24 часа и оплатите на месте при получении.</p></li>
+          <li><b>01</b><h3>Найдите</h3><p>Введите запрос или загрузите фото пары и укажите свой размер.</p></li>
+          <li><b>02</b><h3>Проверьте наличие рядом</h3><p>Сравните цены и остатки именно вашего размера в магазинах города.</p></li>
+          <li><b>03</b><h3>Заберите в магазине</h3><p>Забронируйте на 24 часа, примерьте и оплатите на месте.</p></li>
         </ol>
       </section>
     </div>`;
@@ -385,24 +411,26 @@ function renderHome() {
 
 function visualResultsMarkup() {
   if (visualSearch.phase === 'processing') {
-    return `<div class="processing" role="status"><h2>Ищем похожие позиции…</h2><div class="progress"><span></span></div><p class="muted small">Сравниваем изображение с товарами в ${stores.length} магазинах Астаны</p></div>`;
+    return `<div class="processing" role="status"><h2>Ищем похожие позиции…</h2><div class="progress"><span></span></div><p class="muted small">Сравниваем изображение с обувью в ${stores.length} магазинах Астаны</p></div>`;
   }
   if (visualSearch.phase !== 'done') {
-    return '<div class="empty"><h2>Здесь появятся похожие товары</h2><p>Загрузите фото или выберите пример слева.</p></div>';
+    return '<div class="empty"><h2>Здесь появятся похожие модели</h2><p>Загрузите фото или выберите пример слева.</p></div>';
   }
   const offerList = publishedOffers();
+  const savedSize = readSavedSize();
   const cards = visualScenarios[visualSearch.scenarioIndex].matches.map(([productId, score]) => {
-    const summary = summarizeProduct(productById(productId), offerList);
+    const product = productById(productId);
+    const summary = summarizeProduct(product, offerList, sizeForProduct(product, savedSize));
     const priceText = summary.offers.length ? `от ${money(summary.minPrice)}` : '';
     return `<a class="match-card" href="#/product/${productId}">
-      <div class="thumb"><img src="${imageUrl(summary.product)}" alt="" loading="lazy"></div>
+      <div class="thumb"><img src="${imageUrl(product)}" alt="" loading="lazy"></div>
       <div class="match-score"><span>Совпадение</span><strong>${score}%</strong></div>
-      <h3>${escapeHtml(summary.product.name)}</h3>
-      ${storesStatus(summary.inStock.length)}
+      <h3>${escapeHtml(product.name)}</h3>
+      ${storesStatus(summary.inStock.length, summary.size)}
       <span class="small muted num">${priceText}</span>
     </a>`;
   }).join('');
-  return `<div class="result-bar"><h2>Похожие товары</h2><span class="small muted">Демо: соответствия заданы заранее</span></div><div class="match-grid appear">${cards}</div>`;
+  return `<div class="result-bar"><h2>Похожие модели</h2><span class="small muted">Демо: соответствия заданы заранее</span></div><div class="match-grid appear">${cards}</div>`;
 }
 
 function renderVisual() {
@@ -414,7 +442,7 @@ function renderVisual() {
     ? `<div class="preview"><img src="${escapeHtml(visualSearch.imageUrl)}" alt="Загруженное изображение"></div>${photoDropzone(false)}`
     : photoDropzone(true);
   main.innerHTML = `<div class="page">
-    <div class="page-head"><h1>Поиск по фото</h1><p>Загрузите фото или скриншот — покажем похожие вещи и магазины, где они есть сейчас.</p></div>
+    <div class="page-head"><h1>Поиск по фото</h1><p>Загрузите фото или скриншот пары — покажем похожие модели и магазины, где они есть сейчас.</p></div>
     <div class="visual-layout">
       <aside class="visual-source">${source}<div class="samples"><span class="small muted">Нет фото под рукой? Попробуйте пример</span><div>${samples}</div></div></aside>
       <section aria-live="polite">${visualResultsMarkup()}</section>
@@ -426,6 +454,7 @@ function renderVisual() {
 function readSearchState(params) {
   return {
     q: params.get('q') || '',
+    size: params.has('size') ? params.get('size') : readSavedSize(),
     cat: params.get('cat') || '',
     min: params.get('min') || '',
     max: params.get('max') || '',
@@ -437,7 +466,7 @@ function readSearchState(params) {
 
 function searchHash(state) {
   const params = new URLSearchParams();
-  ['q', 'cat', 'min', 'max', 'dist'].forEach(key => {
+  ['q', 'size', 'cat', 'min', 'max', 'dist'].forEach(key => {
     if (state[key]) params.set(key, state[key]);
   });
   if (state.today) params.set('today', '1');
@@ -464,7 +493,8 @@ function filterProducts(state) {
     rating: (a, b) => b.bestRating - a.bestRating,
   };
   return products
-    .map(product => summarizeProduct(product, offerList))
+    .filter(product => !state.size || sizesOf(product).includes(state.size))
+    .map(product => summarizeProduct(product, offerList, state.size))
     .filter(summary => summary.offers.length)
     .filter(summary => matchesQuery(summary.product, state.q))
     .filter(summary => !state.cat || summary.product.category === state.cat)
@@ -475,18 +505,20 @@ function filterProducts(state) {
 }
 
 function resultItem(summary, index) {
-  const {product, inStock, offers: productOffers} = summary;
+  const {product, inStock, size} = summary;
+  const productHref = `#/product/${product.id}${size ? '?size=' + size : ''}`;
   const nearest = summary.nearest
-    ? `<div class="result-nearest"><ul class="offer-list">${offerRow(summary.nearest)}</ul></div>`
+    ? `<div class="result-nearest"><ul class="offer-list">${offerRow(summary.nearest, size)}</ul></div>`
     : '';
+  const priceNote = inStock.length ? (size ? `цены на размер ${size}` : 'цены по городу') : 'нет в наличии';
   return `<li class="result-item appear" style="animation-delay:${Math.min(index, 8) * 40}ms">
-    <a class="thumb" href="#/product/${product.id}"><img src="${imageUrl(product)}" alt="" loading="lazy"></a>
+    <a class="thumb" href="${productHref}"><img src="${imageUrl(product)}" alt="" loading="lazy"></a>
     <div class="result-info">
       <span class="small muted">${categoryName(product.category)}</span>
-      <h3><a href="#/product/${product.id}">${escapeHtml(product.name)}</a></h3>
-      <div class="result-facts">${storesStatus(inStock.length)}${inStock.length ? `<span>Ближайший — <strong class="num">${formatDistance(summary.nearestKm)}</strong></span>` : ''}</div>
+      <h3><a href="${productHref}">${escapeHtml(product.name)}</a></h3>
+      <div class="result-facts">${storesStatus(inStock.length, size)}${inStock.length ? `<span>Ближайший — <strong class="num">${formatDistance(summary.nearestKm)}</strong></span>` : ''}</div>
     </div>
-    <div class="result-price">${priceRange(summary.minPrice, summary.maxPrice)}<small>${inStock.length ? 'цены по городу' : `в ${productOffers.length} ${plural(productOffers.length, 'магазине', 'магазинах', 'магазинах')}, нет в наличии`}</small></div>
+    <div class="result-price">${priceRange(summary.minPrice, summary.maxPrice)}<small>${priceNote}</small></div>
     ${nearest}
   </li>`;
 }
@@ -496,6 +528,10 @@ function filtersMarkup() {
   return `<details class="filters" ${window.matchMedia('(max-width: 760px)').matches ? '' : 'open'}>
     <summary>Фильтры <span aria-hidden="true">＋</span></summary>
     <div class="filter-body">
+      <fieldset class="filter-group filter-primary"><legend>Мой размер</legend>
+        <select class="select" name="size" data-size-preference aria-label="Мой размер">${sizeOptions(searchState.size, 'Любой размер')}</select>
+        <span class="small muted">Запоминается и подставляется на всех экранах</span>
+      </fieldset>
       <fieldset class="filter-group"><legend>Категория</legend><div class="chips">${chip('cat', '', 'Все')}${categories.map(category => chip('cat', category.id, category.name)).join('')}</div></fieldset>
       <fieldset class="filter-group"><legend>Цена, ₸</legend><div class="price-range">
         <input class="input num" type="number" inputmode="numeric" min="0" step="1000" name="min" placeholder="от" aria-label="Цена от" value="${escapeHtml(searchState.min)}">
@@ -512,14 +548,15 @@ function renderSearchResults() {
   const list = main.querySelector('#result-list');
   if (!list) return;
   const results = filterProducts(searchState);
-  main.querySelector('#result-count').textContent = `Найдено ${results.length} ${plural(results.length, 'товар', 'товара', 'товаров')}`;
+  const sizeNote = searchState.size ? ` в размере ${searchState.size}` : '';
+  main.querySelector('#result-count').textContent = `Найдено ${results.length} ${plural(results.length, 'модель', 'модели', 'моделей')}${sizeNote}`;
   main.querySelectorAll('[data-action="filter"], [data-action="sort"]').forEach(button => {
     const key = button.dataset.action === 'sort' ? 'sort' : button.dataset.key;
     button.setAttribute('aria-pressed', String(searchState[key] === button.dataset.value));
   });
   list.innerHTML = results.length
     ? results.map(resultItem).join('')
-    : '<li class="empty"><h2>Ничего не нашлось</h2><p>Попробуйте другой запрос или ослабьте фильтры.</p><button class="button button-secondary" type="button" data-action="reset-filters">Сбросить фильтры</button></li>';
+    : '<li class="empty"><h2>Ничего не нашлось</h2><p>Попробуйте другой запрос, размер или ослабьте фильтры.</p><button class="button button-secondary" type="button" data-action="reset-filters">Сбросить фильтры</button></li>';
   updateLiveLabels();
 }
 
@@ -532,9 +569,9 @@ function updateSearch(changes) {
 function renderSearch(_, params) {
   searchState = readSearchState(params);
   headerSearch.elements.q.value = searchState.q;
-  const title = searchState.q ? `«${escapeHtml(searchState.q)}»` : searchState.cat ? categoryName(searchState.cat) : 'Все товары';
+  const title = searchState.q ? `«${escapeHtml(searchState.q)}»` : searchState.cat ? categoryName(searchState.cat) : 'Вся обувь';
   main.innerHTML = `<div class="page">
-    <div class="page-head"><h1>${title}</h1><p>Наличие в магазинах Астаны. Расстояние считается от демонстрационной точки «Вы здесь» на Левом берегу.</p></div>
+    <div class="page-head"><h1>${title}</h1><p>Наличие по размерам в магазинах Астаны. Расстояние считается от демонстрационной точки «Вы здесь» на Левом берегу.</p></div>
     <div class="search-layout">
       ${filtersMarkup()}
       <section>
@@ -546,25 +583,51 @@ function renderSearch(_, params) {
   renderSearchResults();
 }
 
-function renderProduct(productId) {
+function productSize(product, params) {
+  const requested = params.get('size');
+  if (requested === 'all') return '';
+  return sizeForProduct(product, requested || readSavedSize());
+}
+
+function sizePicker(product, offerList, selectedSize) {
+  const cells = sizesOf(product).map(size => {
+    const count = offerList.filter(offer => availableIn(offer, size) > 0).length;
+    const selected = size === selectedSize;
+    const classes = ['size-option', count ? '' : 'is-missing', selected ? 'is-selected' : ''].filter(Boolean).join(' ');
+    return `<button class="${classes}" type="button" data-action="pick-size" data-product="${product.id}" data-size="${size}" aria-pressed="${selected}" ${count ? '' : 'disabled'}><strong>${size}</strong><span>${count ? `${count}\u00a0маг.` : 'нет'}</span></button>`;
+  }).join('');
+  const title = selectedSize ? `Размер ${selectedSize}` : 'В каких размерах модель есть в городе';
+  const reset = selectedSize ? `<button class="button button-quiet button-small" type="button" data-action="pick-size" data-product="${product.id}" data-size="">Все размеры</button>` : '<span class="small muted">Выберите размер, чтобы увидеть магазины с ним</span>';
+  return `<div class="size-picker"><div class="size-picker-head"><h2>${title}</h2>${reset}</div><div class="size-options" role="group" aria-label="Размеры">${cells}</div></div>`;
+}
+
+function renderProduct(productId, params) {
   const product = productById(productId);
   if (!product) return renderNotFound();
-  const summary = summarizeProduct(product, publishedOffers());
-  const orderedOffers = [...summary.inStock, ...summary.offers.filter(offer => offer.available <= 0).sort(byDistance)];
-  const points = orderedOffers.map(offer => ({offer, store: storeById(offer.storeId), state: stockState(offer.available)}));
-  const availability = orderedOffers.length
+  const size = productSize(product, params);
+  const summary = summarizeProduct(product, publishedOffers(), size);
+  const listedOffers = size
+    ? summary.inStock
+    : [...summary.inStock, ...summary.offers.filter(offer => offer.availableTotal <= 0).sort(byDistance)];
+  const hiddenCount = summary.offers.length - listedOffers.length;
+  const points = listedOffers.map(offer => ({offer, store: storeById(offer.storeId), state: stockState(availableIn(offer, size), size)}));
+  const hiddenNote = size && hiddenCount
+    ? `<p class="list-note small muted">Ещё в ${storesCount(hiddenCount)} модель есть, но без размера ${size}.</p>`
+    : '';
+  const availability = listedOffers.length
     ? `<div class="availability" id="availability">
         <div class="map-panel" id="map-panel">
           ${cityMap(points)}
-          <button class="map-toggle" type="button" data-action="toggle-map" aria-expanded="false"><span>Развернуть карту</span><span class="num">${orderedOffers.length} ${plural(orderedOffers.length, 'точка', 'точки', 'точек')}</span></button>
+          <button class="map-toggle" type="button" data-action="toggle-map" aria-expanded="false"><span>Развернуть карту</span><span class="num">${listedOffers.length} ${plural(listedOffers.length, 'точка', 'точки', 'точек')}</span></button>
           <div class="map-legend"><span class="status status-in"><span class="dot"></span>Есть в наличии</span><span class="status status-low"><span class="dot"></span>Осталось мало</span><span class="status status-out"><span class="dot"></span>Нет в наличии</span></div>
         </div>
         <div class="availability-list">
-          <div class="list-head"><span>Магазин</span><span>Расстояние и часы</span><span>Цена</span><span>Остаток</span><span></span></div>
-          <ul class="offer-list">${orderedOffers.map(offer => offerRow(offer)).join('')}</ul>
+          <div class="list-head"><span>Магазин</span><span>Расстояние и часы</span><span>Цена</span><span>${size ? `Размер ${size}` : 'Остаток'}</span><span></span></div>
+          <ul class="offer-list">${listedOffers.map(offer => offerRow(offer, size)).join('')}</ul>
+          ${hiddenNote}
         </div>
       </div>`
-    : '<div class="empty"><p>Сейчас этот товар не опубликован ни в одном магазине.</p></div>';
+    : `<div class="empty"><p>${size ? `Размера ${size} сейчас нет ни в одном магазине. Выберите другой размер выше.` : 'Сейчас эта модель не опубликована ни в одном магазине.'}</p></div>`;
   main.innerHTML = `<div class="page">
     <nav class="crumbs" aria-label="Навигация"><a href="#/search">Поиск</a> / <a href="#/search?cat=${product.category}">${categoryName(product.category)}</a></nav>
     <section class="product-head">
@@ -572,15 +635,16 @@ function renderProduct(productId) {
       <div class="product-info">
         <h1>${escapeHtml(product.name)}</h1>
         <p>${escapeHtml(product.description)}</p>
-        <p class="small muted">${escapeHtml(product.details)}</p>
+        <p class="small muted">${escapeHtml(product.details)} · размеры ${product.sizeRange.join('–')}</p>
         <div class="product-summary">
-          <div><span>Цены в городе</span><strong>${summary.offers.length ? priceRange(summary.minPrice, summary.maxPrice) : '—'}</strong></div>
-          <div><span>Магазинов с наличием</span><strong>${summary.inStock.length} из ${summary.offers.length}</strong></div>
+          <div><span>${size ? `Цены на размер ${size}` : 'Цены в городе'}</span><strong>${summary.offers.length ? priceRange(summary.minPrice, summary.maxPrice) : '—'}</strong></div>
+          <div><span>${size ? `Магазинов с размером ${size}` : 'Магазинов с наличием'}</span><strong>${summary.inStock.length} из ${summary.offers.length}</strong></div>
           <div><span>Ближайший</span><strong>${formatDistance(summary.nearestKm)}</strong></div>
         </div>
       </div>
     </section>
-    <section>
+    ${sizePicker(product, summary.offers, size)}
+    <section class="section">
       <div class="section-head"><h2>Где есть сейчас</h2><span class="small muted">Сначала ближайшие с наличием</span></div>
       ${availability}
     </section>
@@ -596,41 +660,50 @@ function normalizePhone(value) {
   return `+7 ${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6, 8)} ${digits.slice(8)}`;
 }
 
-function renderReserve(offerId) {
+function renderReserve(offerId, params) {
   const offer = publishedOffers().find(item => item.id === offerId);
   if (!offer) return renderNotFound();
   const product = productById(offer.productId), store = storeById(offer.storeId);
-  const maxQuantity = Math.min(offer.available, 5);
+  const availableSizes = sizesOf(product).filter(size => availableIn(offer, size) > 0);
   const back = `<nav class="crumbs" aria-label="Навигация"><a href="#/product/${product.id}">← ${escapeHtml(product.name)}</a></nav>`;
-  if (!maxQuantity) {
-    main.innerHTML = `<div class="page">${back}<div class="page-head"><h1>Товар закончился</h1><p>В магазине «${escapeHtml(store.name)}» этой позиции больше нет. Посмотрите другие магазины.</p></div><a class="button" href="#/product/${product.id}">Другие магазины</a></div>`;
+  if (!availableSizes.length) {
+    main.innerHTML = `<div class="page">${back}<div class="page-head"><h1>Модель закончилась</h1><p>В магазине «${escapeHtml(store.name)}» этой модели больше нет ни в одном размере. Посмотрите другие магазины.</p></div><a class="button" href="#/product/${product.id}">Другие магазины</a></div>`;
     return;
   }
+  const requestedSize = params.get('size') || readSavedSize();
+  const initialSize = availableSizes.includes(requestedSize) ? requestedSize : '';
+  const sizeOptionsMarkup = sizesOf(product).map(size => {
+    const count = availableIn(offer, size);
+    return `<option value="${size}" ${size === initialSize ? 'selected' : ''} ${count ? '' : 'disabled'}>${size}${count ? '' : ' — нет'}</option>`;
+  }).join('');
   main.innerHTML = `<div class="page">
     ${back}
-    <div class="page-head"><h1>Бронирование</h1><p>Магазин отложит товар, а вы заберёте и оплатите его на месте.</p></div>
+    <div class="page-head"><h1>Бронирование</h1><p>Магазин отложит пару нужного размера, а вы примерите, заберёте и оплатите её на месте.</p></div>
     <div class="reserve-layout">
-      <form class="form" data-form="reserve" novalidate>
+      <form class="form" data-form="reserve" data-offer="${offer.id}" novalidate>
+        <div class="form-row">
+          <label class="field"><span>Размер</span><select class="select num" name="size" required><option value="" ${initialSize ? '' : 'selected'} disabled>Выберите размер</option>${sizeOptionsMarkup}</select></label>
+          <div class="field"><span>Количество пар</span>
+            <div class="qty"><button type="button" data-step="-1" aria-label="Меньше">−</button><output name="qty" class="num">1</output><button type="button" data-step="1" aria-label="Больше">+</button></div>
+          </div>
+        </div>
         <div class="form-row">
           <label class="field"><span>Имя</span><input class="input" name="name" autocomplete="given-name" required></label>
           <label class="field"><span>Телефон</span><input class="input num" name="phone" type="tel" inputmode="tel" placeholder="+7 700 000 00 00" autocomplete="tel" required></label>
         </div>
-        <div class="field"><span>Количество</span>
-          <div class="qty"><button type="button" data-step="-1" aria-label="Меньше">−</button><output name="qty" class="num">1</output><button type="button" data-step="1" aria-label="Больше">+</button></div>
-          <span class="small muted">Можно отложить до ${maxQuantity} шт.</span>
-        </div>
-        <label class="field"><span>Комментарий для магазина</span><textarea class="textarea" name="comment" maxlength="300" placeholder="Например, размер или время, когда заедете"></textarea></label>
-        <div class="notice"><h3>Оплата в магазине при получении</h3><p>Онлайн-оплаты нет. Бронь держится 24 часа с момента оформления, после этого товар вернётся в продажу.</p></div>
+        <label class="field"><span>Комментарий для магазина</span><textarea class="textarea" name="comment" maxlength="300" placeholder="Например, когда заедете на примерку"></textarea></label>
+        <div class="notice"><h3>Оплата в магазине при получении</h3><p>Онлайн-оплаты нет. Бронь держится 24 часа с момента оформления, после этого пара вернётся в продажу.</p></div>
         <div><button class="button" type="submit">Забронировать на 24 часа</button></div>
       </form>
       <aside class="summary">
-        <div class="summary-product"><div class="thumb"><img src="${imageUrl(product)}" alt=""></div><div><h3>${escapeHtml(product.name)}</h3>${stockStatus(offer.available)}${updatedLabel(offer.updatedAt)}</div></div>
+        <div class="summary-product"><div class="thumb"><img src="${imageUrl(product)}" alt=""></div><div><h3>${escapeHtml(product.name)}</h3><div id="reserve-stock"></div>${updatedLabel(offer.updatedAt)}</div></div>
         <dl>
+          <div><dt>Размер</dt><dd id="reserve-size" class="num"></dd></div>
           <div><dt>Магазин</dt><dd>${escapeHtml(store.name)}</dd></div>
           <div><dt>Адрес</dt><dd>${escapeHtml(store.address)}</dd></div>
           <div><dt>Часы работы</dt><dd>${hoursText(store)}</dd></div>
           <div><dt>Расстояние</dt><dd>${formatDistance(distanceKm(store))}</dd></div>
-          <div><dt>Цена за штуку</dt><dd>${money(offer.price)}</dd></div>
+          <div><dt>Цена за пару</dt><dd>${money(offer.price)}</dd></div>
           <div class="total"><dt>К оплате в магазине</dt><dd id="reserve-total">${money(offer.price)}</dd></div>
         </dl>
       </aside>
@@ -638,40 +711,55 @@ function renderReserve(offerId) {
   </div>`;
   const form = main.querySelector('[data-form="reserve"]');
   const output = form.elements.qty;
-  const syncQuantity = quantity => {
+  const syncForm = () => {
+    const size = form.elements.size.value;
+    const maxQuantity = size ? Math.min(availableIn(offer, size), maxPairsPerReservation) : 1;
+    const quantity = Math.min(maxQuantity, Math.max(1, Number(output.value)));
     output.value = quantity;
     form.querySelector('[data-step="-1"]').disabled = quantity <= 1;
     form.querySelector('[data-step="1"]').disabled = quantity >= maxQuantity;
+    main.querySelector('#reserve-size').textContent = size || 'не выбран';
+    main.querySelector('#reserve-stock').innerHTML = size ? stockStatus(availableIn(offer, size), size) : stockStatus(offer.availableTotal, '');
     main.querySelector('#reserve-total').textContent = money(offer.price * quantity);
   };
   form.querySelectorAll('[data-step]').forEach(button => button.addEventListener('click', () => {
-    syncQuantity(Math.min(maxQuantity, Math.max(1, Number(output.value) + Number(button.dataset.step))));
+    output.value = Number(output.value) + Number(button.dataset.step);
+    syncForm();
   }));
-  syncQuantity(1);
-  form.dataset.offer = offer.id;
+  form.elements.size.addEventListener('change', () => {
+    form.elements.size.removeAttribute('aria-invalid');
+    syncForm();
+  });
+  syncForm();
 }
 
 function submitReservation(form) {
   const offer = publishedOffers().find(item => item.id === form.dataset.offer);
+  const size = form.elements.size.value;
   const name = form.elements.name.value.trim();
   const phone = normalizePhone(form.elements.phone.value);
   const quantity = Number(form.elements.qty.value);
   form.querySelectorAll('.field-error').forEach(error => error.remove());
-  const errors = [[form.elements.name, name.length >= 2, 'Укажите имя'], [form.elements.phone, Boolean(phone), 'Номер в формате +7 700 000 00 00']];
-  errors.forEach(([input, valid, message]) => {
+  const checks = [
+    [form.elements.size, Boolean(size), 'Выберите размер'],
+    [form.elements.name, name.length >= 2, 'Укажите имя'],
+    [form.elements.phone, Boolean(phone), 'Номер в формате +7 700 000 00 00'],
+  ];
+  checks.forEach(([input, valid, message]) => {
     input.setAttribute('aria-invalid', String(!valid));
     if (!valid) input.insertAdjacentHTML('afterend', `<span class="field-error">${message}</span>`);
   });
-  if (errors.some(([, valid]) => !valid)) {
-    errors.find(([, valid]) => !valid)[0].focus();
+  const firstInvalid = checks.find(([, valid]) => !valid);
+  if (firstInvalid) {
+    firstInvalid[0].focus();
     return;
   }
-  if (!offer || offer.available < quantity) {
-    showToast('Остаток изменился, выберите другой магазин');
+  if (!offer || availableIn(offer, size) < quantity) {
+    showToast('Остаток изменился, выберите другой размер или магазин');
     router();
     return;
   }
-  const reservation = createReservationRecord(offer, {name, phone, qty: quantity, comment: form.elements.comment.value.trim(), owner: 'me'});
+  const reservation = createReservationRecord(offer, {size, name, phone, qty: quantity, comment: form.elements.comment.value.trim(), owner: 'me'});
   saveReservations([...loadReservations(), reservation]);
   showToast('Бронь отправлена в магазин');
   location.hash = '#/reservations/' + reservation.id;
@@ -682,23 +770,25 @@ function renderReservationDetail(reservationId) {
   if (!reservation) return renderNotFound();
   const product = productById(reservation.productId), store = storeById(reservation.storeId);
   const state = reservationState(reservation), active = isReservationActive(reservation);
-  const titles = {pending: 'Бронь оформлена', confirmed: 'Товар ждёт вас'};
+  const titles = {pending: 'Бронь оформлена', confirmed: 'Пара ждёт вас'};
   const pendingNotice = state === 'pending'
-    ? `<div class="notice"><h3>Магазин проверяет наличие</h3><p>Обычно подтверждение приходит в течение 15 минут. В демо подтвердите бронь сами в <a href="#/merchant">панели магазина</a> «${escapeHtml(store.name)}».</p></div>`
+    ? `<div class="notice"><h3>Магазин проверяет наличие размера</h3><p>Обычно подтверждение приходит в течение 15 минут. В демо подтвердите бронь сами в <a href="#/merchant">панели магазина</a> «${escapeHtml(store.name)}».</p></div>`
     : '';
   main.innerHTML = `<div class="page">
     <nav class="crumbs" aria-label="Навигация"><a href="#/reservations">Мои брони</a></nav>
-    <div class="page-head"><h1>${titles[state] || reservationStatusLabels[state]}</h1><p>Назовите код в магазине. Оплата при получении, онлайн платить ничего не нужно.</p></div>
+    <div class="page-head"><h1>${titles[state] || reservationStatusLabels[state]}</h1><p>Назовите код в магазине. Примерка и оплата на месте, онлайн платить ничего не нужно.</p></div>
     <div class="ticket">
       <div class="ticket-code">
         <span class="small muted">Код брони</span>
         <strong>${formatCode(reservation.code)}</strong>
+        <span class="ticket-size num">Размер ${escapeHtml(reservation.size)} · ${pairs(reservation.qty)}</span>
         ${active ? timerLabel(reservation) : ''}
         ${reservationStatusLabel(reservation)}
       </div>
       ${pendingNotice}
       <dl>
-        <dt>Товар</dt><dd><a href="#/product/${product.id}">${escapeHtml(product.name)}</a>, ${reservation.qty} шт.</dd>
+        <dt>Модель</dt><dd><a href="#/product/${product.id}?size=${escapeHtml(reservation.size)}">${escapeHtml(product.name)}</a></dd>
+        <dt>Размер</dt><dd class="num">${escapeHtml(reservation.size)}, ${pairs(reservation.qty)}</dd>
         <dt>Магазин</dt><dd>${escapeHtml(store.name)}</dd>
         <dt>Адрес</dt><dd>${escapeHtml(store.address)} · <span class="num">${formatDistance(distanceKm(store))}</span></dd>
         <dt>Часы работы</dt><dd>${hoursText(store)}</dd>
@@ -721,7 +811,7 @@ function customerReservationRow(reservation) {
   const link = '#/reservations/' + reservation.id;
   return `<li class="reservation-row ${active ? '' : 'is-closed'}">
     <a class="thumb" href="${link}"><img src="${imageUrl(product)}" alt=""></a>
-    <div class="reservation-main"><h3><a href="${link}">${escapeHtml(product.name)}</a></h3><p class="num">Код ${formatCode(reservation.code)} · ${reservation.qty} шт. · ${money(reservation.price * reservation.qty)} в магазине</p></div>
+    <div class="reservation-main"><h3><a href="${link}">${escapeHtml(product.name)}</a></h3><p class="num"><b class="size-inline">Размер ${escapeHtml(reservation.size)}</b> · ${pairs(reservation.qty)} · код ${formatCode(reservation.code)} · ${money(reservation.price * reservation.qty)} в магазине</p></div>
     <div class="reservation-place"><strong>${escapeHtml(store.name)}</strong><br>${escapeHtml(store.address)}</div>
     <div class="reservation-time">${reservationStatusLabel(reservation)}${active ? timerLabel(reservation) : ''}</div>
     <div class="reservation-actions">${active ? `<button class="button button-small button-quiet" type="button" data-action="cancel-reservation" data-id="${reservation.id}">Отменить</button>` : ''}<a class="button button-small button-secondary" href="${link}">Открыть</a></div>
@@ -736,20 +826,23 @@ function renderReservations(reservationId) {
   const group = (title, list) => list.length ? `<h2 class="group-title">${title}</h2><ul class="reservation-list">${list.map(customerReservationRow).join('')}</ul>` : '';
   main.innerHTML = `<div class="page">
     <div class="page-head"><h1>Мои брони</h1><p>Брони хранятся в этом браузере. Каждая действует 24 часа с момента оформления, оплата — в магазине.</p></div>
-    ${mine.length ? group('Активные', active) + group('Завершённые', closed) : '<div class="empty"><h2>Броней пока нет</h2><p>Найдите товар и отложите его в ближайшем магазине.</p><a class="button" href="#/search">Найти товар</a></div>'}
+    ${mine.length ? group('Активные', active) + group('Завершённые', closed) : '<div class="empty"><h2>Броней пока нет</h2><p>Найдите пару своего размера и отложите её в ближайшем магазине.</p><a class="button" href="#/search">Найти обувь</a></div>'}
   </div>`;
 }
 
 function seedIncomingReservations(storeId) {
   const seeded = readStorage(storageKeys.seededStores, []);
   if (seeded.includes(storeId)) return;
-  const storeOffers = publishedOffers().filter(offer => offer.storeId === storeId && offer.available > 0);
+  const storeOffers = publishedOffers().filter(offer => offer.storeId === storeId && offer.availableTotal > 0);
   const guests = demoGuestReservations.slice(0, storeOffers.length).map((guest, index) => {
+    const offer = storeOffers[index];
+    const size = Object.keys(offer.available).find(key => offer.available[key] > 0);
     const createdAt = Date.now() - guest.hoursAgo * hourMs;
-    return createReservationRecord(storeOffers[index], {
+    return createReservationRecord(offer, {
+      size,
       name: guest.name,
       phone: guest.phone,
-      qty: Math.min(guest.qty, storeOffers[index].available),
+      qty: Math.min(guest.qty, offer.available[size]),
       comment: guest.comment,
       owner: 'guest',
       status: guest.status,
@@ -782,7 +875,7 @@ function incomingReservationRow(reservation) {
     confirmed: `<button class="button button-small button-secondary" type="button" data-action="collect-reservation" data-id="${reservation.id}">Выдано покупателю</button>`,
   };
   return `<li class="reservation-row ${active ? '' : 'is-closed'}">
-    <div class="reservation-main"><h3>${escapeHtml(product.name)}, ${reservation.qty} шт.</h3><p class="num">Код ${formatCode(reservation.code)} · ${money(reservation.price * reservation.qty)}</p></div>
+    <div class="reservation-main"><h3>${escapeHtml(product.name)}, размер ${escapeHtml(reservation.size)}</h3><p class="num">${pairs(reservation.qty)} · код ${formatCode(reservation.code)} · ${money(reservation.price * reservation.qty)}</p></div>
     <div class="reservation-place"><strong>${escapeHtml(reservation.name)}</strong> · <span class="num">${escapeHtml(reservation.phone)}</span>${reservation.comment ? `<br>«${escapeHtml(reservation.comment)}»` : ''}</div>
     <div class="reservation-time">${reservationStatusLabel(reservation)}</div>
     <div class="reservation-time">${active ? `${timerLabel(reservation)}<span class="muted">до истечения</span>` : `<span class="muted">${dateFormat.format(reservation.createdAt)}</span>`}</div>
@@ -790,9 +883,20 @@ function incomingReservationRow(reservation) {
   </li>`;
 }
 
+function merchantOfferRow(offer) {
+  const product = productById(offer.productId);
+  return `<li class="offer-row ${offer.stockTotal ? '' : 'is-out'} ${offer.published ? '' : 'is-hidden'}" data-offer="${offer.id}">
+    <div class="offer-main"><h3><a href="#/product/${product.id}">${escapeHtml(product.name)}</a></h3><p>${categoryName(product.category)}</p></div>
+    <div class="offer-meta"><strong>${offer.published ? 'Опубликована' : 'Снята с публикации'}</strong><span>${offer.reservedTotal ? `В брони ${pairs(offer.reservedTotal)}` : 'Броней нет'}</span></div>
+    <div class="offer-price">${money(offer.price)}</div>
+    <div class="offer-stock">${stockStatus(offer.stockTotal, '')}${updatedLabel(offer.updatedAt)}</div>
+    <div class="offer-action"><button class="button button-small button-quiet" type="button" data-action="toggle-offer" data-id="${offer.id}">${offer.published ? 'Снять с публикации' : 'Опубликовать'}</button></div>
+  </li>`;
+}
+
 function renderMerchantLogin() {
   main.innerHTML = `<div class="page">
-    <div class="page-head"><h1>Панель магазина</h1><p>Обновляйте цены и остатки, подтверждайте брони покупателей.</p></div>
+    <div class="page-head"><h1>Панель магазина</h1><p>Обновляйте цены и остатки по размерам, подтверждайте брони покупателей.</p></div>
     <form class="login" data-form="merchant-login">
       <h2>Вход для магазина</h2>
       <p class="small muted">Демонстрационный вход: выберите магазин, пароль не нужен.</p>
@@ -812,15 +916,6 @@ function renderMerchant() {
   const pendingCount = active.filter(reservation => reservationState(reservation) === 'pending').length;
   const stats = merchantStats(store, storeReservations);
   const storeOffers = allOffers().filter(offer => offer.storeId === store.id);
-  const availableProducts = products.filter(product => !storeOffers.some(offer => offer.productId === product.id));
-  const addForm = availableProducts.length
-    ? `<form class="add-form" data-form="add-offer">
-        <label class="field"><span>Товар</span><select class="select" name="product">${availableProducts.map(product => `<option value="${product.id}">${escapeHtml(product.name)}</option>`).join('')}</select></label>
-        <label class="field"><span>Цена, ₸</span><input class="input num" type="number" name="price" min="1" step="100" required></label>
-        <label class="field"><span>Остаток, шт.</span><input class="input num" type="number" name="stock" min="0" required></label>
-        <button class="button" type="submit">Добавить позицию</button>
-      </form>`
-    : '';
   main.innerHTML = `<div class="page">
     <div class="merchant-head">
       <div class="page-head"><span class="crumbs">Панель магазина</span><h1>${escapeHtml(store.name)}</h1><p>${escapeHtml(store.address)} · ${hoursText(store)}</p></div>
@@ -837,42 +932,26 @@ function renderMerchant() {
     </section>
     <section class="section merchant-offers">
       <div class="section-head"><h2>Позиции магазина</h2><span class="small muted">${storeOffers.length} ${plural(storeOffers.length, 'позиция', 'позиции', 'позиций')}</span></div>
-      <div class="list-head"><span>Товар</span><span>Публикация</span><span>Цена</span><span>Остаток</span><span></span></div>
-      <ul class="offer-list">${storeOffers.map(offer => offerRow(offer, 'merchant')).join('')}</ul>
-      ${addForm}
+      <div class="list-head"><span>Модель</span><span>Публикация</span><span>Цена</span><span>Остаток</span><span></span></div>
+      <ul class="offer-list">${storeOffers.map(merchantOfferRow).join('')}</ul>
     </section>
   </div>`;
-  main.querySelector('.offer-edit input')?.focus();
-}
-
-function saveEditedOffer(form) {
-  const price = Number(form.elements.price.value), stock = Number(form.elements.stock.value);
-  if (!(price > 0) || !Number.isInteger(stock) || stock < 0) {
-    showToast('Проверьте цену и остаток');
-    return;
-  }
-  saveOfferChange(form.dataset.id, {price, stock, updatedAt: Date.now()});
-  editingOfferId = '';
-  showToast('Позиция обновлена');
-  router();
-}
-
-function addOffer(form) {
-  const storeId = readStorage(storageKeys.merchantStore, '');
-  const price = Number(form.elements.price.value), stock = Number(form.elements.stock.value);
-  if (!(price > 0) || !Number.isInteger(stock) || stock < 0) {
-    showToast('Проверьте цену и остаток');
-    return;
-  }
-  const added = readStorage(storageKeys.addedOffers, []);
-  added.push({id: 'm' + Date.now().toString(36), productId: form.elements.product.value, storeId, price, stock, updatedAt: Date.now(), published: true});
-  writeStorage(storageKeys.addedOffers, added);
-  showToast('Позиция опубликована');
-  router();
 }
 
 function renderNotFound() {
   main.innerHTML = '<div class="page"><div class="page-head"><h1>Страница не найдена</h1><p>Возможно, ссылка устарела или позиция снята с публикации.</p></div><a class="button" href="#/">На главную</a></div>';
+}
+
+function pickSize(button) {
+  const route = parseRoute();
+  const size = button.dataset.size;
+  if (route.name === 'product') {
+    const nextSize = !size || button.getAttribute('aria-pressed') === 'true' ? 'all' : size;
+    history.replaceState(null, '', `#/product/${route.id}?size=${nextSize}`);
+    router();
+    return;
+  }
+  location.hash = `#/product/${button.dataset.product}?size=${size || 'all'}`;
 }
 
 const formHandlers = {
@@ -884,18 +963,17 @@ const formHandlers = {
     writeStorage(storageKeys.merchantStore, form.elements.store.value);
     router();
   },
-  'edit-offer': saveEditedOffer,
-  'add-offer': addOffer,
 };
 
 const actions = {
   filter: button => updateSearch({[button.dataset.key]: button.dataset.value}),
   sort: button => updateSearch({sort: button.dataset.value}),
   'reset-filters': () => {
-    const reset = {...readSearchState(new URLSearchParams()), q: searchState.q, sort: searchState.sort};
+    const reset = {...readSearchState(new URLSearchParams()), q: searchState.q, size: searchState.size, sort: searchState.sort};
     history.replaceState(null, '', searchHash(reset));
     router();
   },
+  'pick-size': pickSize,
   'visual-sample': button => {
     const scenarioIndex = Number(button.dataset.index);
     startVisualSearch(imageUrl(productById(visualScenarios[scenarioIndex].sampleProductId)), scenarioIndex);
@@ -924,16 +1002,11 @@ const actions = {
     const reservation = loadReservations().find(item => item.id === button.dataset.id);
     const offer = allOffers().find(item => item.id === reservation.offerId);
     updateReservation(reservation.id, {status: 'collected'});
-    if (offer) saveOfferChange(offer.id, {stock: Math.max(0, offer.stock - reservation.qty), updatedAt: Date.now()});
-    showToast('Товар выдан, остаток уменьшен');
-    router();
-  },
-  'edit-offer': button => {
-    editingOfferId = button.dataset.id;
-    router();
-  },
-  'cancel-edit': () => {
-    editingOfferId = '';
+    if (offer) {
+      const sizes = {...offer.sizes, [reservation.size]: Math.max(0, (offer.sizes[reservation.size] || 0) - reservation.qty)};
+      saveOfferChange(offer.id, {sizes, updatedAt: Date.now()});
+    }
+    showToast(`Выдано, остаток размера ${reservation.size} уменьшен`);
     router();
   },
   'toggle-offer': button => {
@@ -944,7 +1017,6 @@ const actions = {
   },
   'merchant-logout': () => {
     writeStorage(storageKeys.merchantStore, '');
-    editingOfferId = '';
     router();
   },
 };
@@ -967,7 +1039,13 @@ main.addEventListener('input', event => {
 });
 
 main.addEventListener('change', event => {
-  if (event.target.name === 'today') updateSearch({today: event.target.checked});
+  const field = event.target;
+  if (field.matches('[data-size-preference]')) {
+    saveSize(field.value);
+    if (searchState && field.closest('.filters')) updateSearch({size: field.value});
+    showToast(field.value ? `Размер ${field.value} сохранён` : 'Размер сброшен');
+  }
+  if (field.name === 'today') updateSearch({today: field.checked});
 });
 
 headerSearch.addEventListener('submit', event => {
